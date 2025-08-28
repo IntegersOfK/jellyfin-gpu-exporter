@@ -4,15 +4,20 @@ import subprocess
 import time
 import os
 
+
 CONTAINER_NAME = os.getenv("TARGET_CONTAINER", "jellyfin")
 PORT = int(os.getenv("EXPORTER_PORT", "9109"))
+USE_DOCKER = os.getenv("USE_DOCKER", "true").lower() in ("1", "true", "yes")
 
 class JellyfinGPUCollector:
     def __init__(self):
         self.error_total = 0
 
     def collect(self):
-        labels = [CONTAINER_NAME]
+        if USE_DOCKER:
+            labels = [CONTAINER_NAME]
+        else:
+            labels = ["host"]
         metrics = {
             "jellyfin_gpu_ok": 0,
             "jellyfin_gpu_memory_used_mebibytes": 0,
@@ -23,29 +28,54 @@ class JellyfinGPUCollector:
             "jellyfin_gpu_process_count": 0
         }
 
-        try:
-            # Query main GPU metrics
-            cmd = [
-                "docker", "exec", CONTAINER_NAME, "nvidia-smi",
-                "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw",
-                "--format=csv,noheader,nounits"
-            ]
-            out = subprocess.check_output(cmd, text=True, timeout=5).strip()
-            parts = out.split(",")
-            if len(parts) == 5:
-                metrics["jellyfin_gpu_ok"] = 1
-                metrics["jellyfin_gpu_memory_used_mebibytes"] = int(parts[0].strip())
-                metrics["jellyfin_gpu_memory_total_mebibytes"] = int(parts[1].strip())
-                metrics["jellyfin_gpu_utilization_percent"] = int(parts[2].strip())
-                metrics["jellyfin_gpu_temperature_celsius"] = int(parts[3].strip())
-                metrics["jellyfin_gpu_power_draw_watts"] = float(parts[4].strip())
 
-            # Query number of GPU processes
-            proc_out = subprocess.check_output([
-                "docker", "exec", CONTAINER_NAME, "nvidia-smi",
-                "--query-compute-apps=pid", "--format=csv,noheader"
-            ], text=True, timeout=5)
-            metrics["jellyfin_gpu_process_count"] = len([line for line in proc_out.strip().splitlines() if line.strip()])
+        try:
+            if USE_DOCKER:
+                # Query main GPU metrics via docker
+                cmd = [
+                    "docker", "exec", CONTAINER_NAME, "nvidia-smi",
+                    "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw",
+                    "--format=csv,noheader,nounits"
+                ]
+                out = subprocess.check_output(cmd, text=True, timeout=5).strip()
+                parts = out.split(",")
+                if len(parts) == 5:
+                    metrics["jellyfin_gpu_ok"] = 1
+                    metrics["jellyfin_gpu_memory_used_mebibytes"] = int(parts[0].strip())
+                    metrics["jellyfin_gpu_memory_total_mebibytes"] = int(parts[1].strip())
+                    metrics["jellyfin_gpu_utilization_percent"] = int(parts[2].strip())
+                    metrics["jellyfin_gpu_temperature_celsius"] = int(parts[3].strip())
+                    metrics["jellyfin_gpu_power_draw_watts"] = float(parts[4].strip())
+
+                # Query number of GPU processes via docker
+                proc_out = subprocess.check_output([
+                    "docker", "exec", CONTAINER_NAME, "nvidia-smi",
+                    "--query-compute-apps=pid", "--format=csv,noheader"
+                ], text=True, timeout=5)
+                metrics["jellyfin_gpu_process_count"] = len([line for line in proc_out.strip().splitlines() if line.strip()])
+            else:
+                # Query main GPU metrics directly on host
+                cmd = [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw",
+                    "--format=csv,noheader,nounits"
+                ]
+                out = subprocess.check_output(cmd, text=True, timeout=5).strip()
+                parts = out.split(",")
+                if len(parts) == 5:
+                    metrics["jellyfin_gpu_ok"] = 1
+                    metrics["jellyfin_gpu_memory_used_mebibytes"] = int(parts[0].strip())
+                    metrics["jellyfin_gpu_memory_total_mebibytes"] = int(parts[1].strip())
+                    metrics["jellyfin_gpu_utilization_percent"] = int(parts[2].strip())
+                    metrics["jellyfin_gpu_temperature_celsius"] = int(parts[3].strip())
+                    metrics["jellyfin_gpu_power_draw_watts"] = float(parts[4].strip())
+
+                # Query number of GPU processes directly on host
+                proc_out = subprocess.check_output([
+                    "nvidia-smi",
+                    "--query-compute-apps=pid", "--format=csv,noheader"
+                ], text=True, timeout=5)
+                metrics["jellyfin_gpu_process_count"] = len([line for line in proc_out.strip().splitlines() if line.strip()])
 
         except Exception:
             # Leave all defaults for gauges (i.e., 0s)
@@ -67,7 +97,10 @@ class JellyfinGPUCollector:
 if __name__ == "__main__":
     REGISTRY.register(JellyfinGPUCollector())
     start_http_server(PORT)
-    print(f"Serving on port {PORT}, monitoring container '{CONTAINER_NAME}'")
+    if USE_DOCKER:
+        print(f"Serving on port {PORT}, monitoring container '{CONTAINER_NAME}' (docker mode)")
+    else:
+        print(f"Serving on port {PORT}, monitoring host GPU (host mode)")
     while True:
         time.sleep(3600)
 

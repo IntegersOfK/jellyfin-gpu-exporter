@@ -1,8 +1,9 @@
 # Jellyfin GPU Exporter
 
-A lightweight Prometheus exporter that monitors the NVIDIA GPU usage inside a running **Jellyfin Docker container**.
 
-This exporter runs independently, calls `nvidia-smi` inside the Jellyfin container using `docker exec`, and exposes metrics on `/metrics` for Prometheus scraping.
+A lightweight Prometheus exporter that monitors NVIDIA GPU usage for Jellyfin, supporting both **Docker containers** and **host/LXC** deployments.
+
+This exporter runs independently, calls `nvidia-smi` (either inside a Docker container or directly on the host/LXC), and exposes metrics on `/metrics` for Prometheus scraping.
 
 ---
 
@@ -26,21 +27,69 @@ cd jellyfin-gpu-exporter
 docker build -t ajwest3d/jellyfin-gpu-exporter:latest .
 ```
 
+
 ### 2. Run the exporter
+
+#### Docker mode (default)
 ```bash
 docker run -d \
   --name jellyfin-gpu-exporter \
   -e TARGET_CONTAINER=jellyfin \
   -e EXPORTER_PORT=9109 \
+  -e USE_DOCKER=true \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 9109:9109 \
   ajwest3d/jellyfin-gpu-exporter:latest
 ```
 
-- `TARGET_CONTAINER`: Name of your Jellyfin container (default: `jellyfin`)
-- `EXPORTER_PORT`: Port to expose metrics on (default: `9109`)
 
-> 🔐 Note: Mounting Docker socket allows this container to run `docker exec` commands into Jellyfin. Only do this on trusted hosts.
+#### Host/LXC mode (no Docker)
+You can run the exporter directly on the host or inside an LXC container with access to the NVIDIA GPU. The following steps will set up a Python virtual environment, install dependencies, and run the exporter as a service with minimal manual steps.
+
+##### Quick Setup
+```bash
+git clone https://github.com/IntegersOfK/jellyfin-gpu-exporter.git
+cd jellyfin-gpu-exporter
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+deactivate
+sudo cp -r . /opt/jellyfin-gpu-exporter
+sudo chown -R nobody:nogroup /opt/jellyfin-gpu-exporter
+```
+
+##### Example systemd service file
+Create `/etc/systemd/system/jellyfin-gpu-exporter.service`:
+
+```ini
+[Unit]
+Description=Jellyfin GPU Exporter
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+WorkingDirectory=/opt/jellyfin-gpu-exporter
+Environment=USE_DOCKER=false
+Environment=EXPORTER_PORT=9109
+ExecStart=/opt/jellyfin-gpu-exporter/venv/bin/python /opt/jellyfin-gpu-exporter/jellyfin_gpu_exporter.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+##### Enable and start the service
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now jellyfin-gpu-exporter
+```
+
+> 📝 The exporter will now run in a sandboxed Python venv as the `nobody` user. Adjust user/group as needed for your environment.
+
+- `USE_DOCKER`: Set to `false` to run directly on the host/LXC (default: `true`).
+- `TARGET_CONTAINER`: Only needed in Docker mode. Ignored in host mode.
+- `EXPORTER_PORT`: Port to expose metrics on (default: `9109`).
 
 ---
 
@@ -55,6 +104,8 @@ docker run -d \
 | `jellyfin_gpu_power_draw_watts` | Estimated power usage (W) |
 | `jellyfin_gpu_process_count` | Number of active GPU processes |
 | `jellyfin_gpu_exporter_errors_total` | Exporter errors total counter |
+
+> In host/LXC mode, the `container` label will be set to `host`.
 
 ---
 
